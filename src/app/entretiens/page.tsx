@@ -22,8 +22,7 @@ import { mockPipelineJobs } from "@/data/mock-applications"
 import { buildInterviewWorkspace, buildPostInterviewLearning } from "@/lib/interview-coach"
 import { isInterviewStatus } from "@/lib/interview-handoff"
 import { cn } from "@/lib/utils"
-import type { ApplicationStatus } from "@/types"
-import type { InterviewPrepResponse } from "@/lib/llm/interview-prep"
+import type { ApplicationStatus, InterviewPrepResponse } from "@/types"
 import { CompanyLogo } from "@/components/shared/CompanyLogo"
 import {
   MetricTile,

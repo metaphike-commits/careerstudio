@@ -2,6 +2,7 @@ import type {
   Application,
   ApplicationPack,
   CVVersion,
+  InterviewPrepResponse,
   JobOffer,
   MemoryItem,
   NetworkContact,
@@ -16,6 +17,8 @@ import {
   type LLMProviderName,
 } from "@/lib/llm/cv-targeting"
 
+export type { InterviewPrepResponse } from "@/types"
+
 export interface InterviewPrepRequestBody {
   profile?: UserProfile
   application?: Application
@@ -25,17 +28,6 @@ export interface InterviewPrepRequestBody {
   linkedContact?: NetworkContact | null
   memoryItems?: MemoryItem[]
   workspace?: InterviewWorkspace
-}
-
-export interface InterviewPrepResponse {
-  roleStakes: string[]
-  likelyQuestions: { question: string; answerAngle: string; proofToUse: string }[]
-  tailoredAnswers: { prompt: string; answer: string }[]
-  objections: { objection: string; responseAngle: string }[]
-  starMapping: { situation: string; story: string; useFor: string[] }[]
-  prepChecklist: string[]
-  companyResearch: string[]
-  questionsToAsk: string[]
 }
 
 interface AnthropicMessageContent {

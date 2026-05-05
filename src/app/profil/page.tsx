@@ -22,7 +22,7 @@ import {
   X,
   XCircle,
 } from "lucide-react"
-import type { LinkedInAboutResult } from "@/lib/llm/linkedin-about"
+import type { LinkedInAboutResult } from "@/types"
 import { buildLocalIntelligence } from "@/lib/local-intelligence"
 import { useAppStore } from "@/stores/app-store"
 import { cn } from "@/lib/utils"

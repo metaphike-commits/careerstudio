@@ -1,14 +1,10 @@
-import type { UserProfile } from "@/types"
+import type { LinkedInAboutResult, UserProfile } from "@/types"
 import {
   isNonEmptyString,
   type LLMProviderName,
 } from "@/lib/llm/cv-targeting"
 
-export interface LinkedInAboutResult {
-  formal: string
-  conversational: string
-  bold: string
-}
+export type { LinkedInAboutResult } from "@/types"
 
 export interface LinkedInAboutRequestBody {
   profile?: UserProfile

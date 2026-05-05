@@ -316,3 +316,20 @@ export interface MasterCV {
   parsedStatus: "pending" | "processing" | "done" | "error"
   extractedProfileId: string | null
 }
+
+export interface LinkedInAboutResult {
+  formal: string
+  conversational: string
+  bold: string
+}
+
+export interface InterviewPrepResponse {
+  roleStakes: string[]
+  likelyQuestions: { question: string; answerAngle: string; proofToUse: string }[]
+  tailoredAnswers: { prompt: string; answer: string }[]
+  objections: { objection: string; responseAngle: string }[]
+  starMapping: { situation: string; story: string; useFor: string[] }[]
+  prepChecklist: string[]
+  companyResearch: string[]
+  questionsToAsk: string[]
+}
