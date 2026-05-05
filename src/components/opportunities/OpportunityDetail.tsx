@@ -40,7 +40,7 @@ interface OpportunityDetailProps {
 
 type DetailTab = "analysis" | "preparation" | "company" | "history"
 type CVTargetState = "idle" | "loading" | "done" | "error" | "config" | "fallback" | "disabled"
-type PackGenerationState = "idle" | "loading" | "error" | "config" | "done" | "disabled"
+type PackGenerationState = "idle" | "loading" | "preview" | "error" | "config" | "done" | "disabled"
 
 interface GeneratedCVTarget {
   experiences: { id: string; bullets: string[] }[]
@@ -203,6 +203,7 @@ export function OpportunityDetail({ opportunity }: OpportunityDetailProps) {
   const [isGeneratedExpanded, setIsGeneratedExpanded] = useState(true)
   const [savedCVId, setSavedCVId] = useState<string | null>(null)
   const [packGenerationState, setPackGenerationState] = useState<PackGenerationState>("idle")
+  const [pendingPackResult, setPendingPackResult] = useState<ApplicationPack | null>(null)
   const { score } = opportunity
   const linkedCV = mockCVVersions.find((cv) => cv.jobOfferId === opportunity.id)
   const pack = applicationPacks[opportunity.id] ?? null
@@ -325,8 +326,8 @@ export function OpportunityDetail({ opportunity }: OpportunityDetailProps) {
         return
       }
 
-      saveApplicationPack(body.applicationPack)
-      setPackGenerationState("done")
+      setPendingPackResult(body.applicationPack)
+      setPackGenerationState("preview")
     } catch {
       setPackGenerationState("error")
     }
@@ -880,6 +881,72 @@ export function OpportunityDetail({ opportunity }: OpportunityDetailProps) {
         {activeTab === "preparation" && (
           pack ? (
             <ApplicationPackPanel pack={pack} profile={profile} opportunity={opportunity} />
+          ) : packGenerationState === "preview" && pendingPackResult ? (
+            <div className="flex flex-col gap-5 px-6 py-8">
+              <div className="flex items-center gap-3 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">
+                <Target className="h-4 w-4 shrink-0 text-violet-600" />
+                <p className="text-sm font-semibold text-violet-900">
+                  Pack généré par IA — A relire avant de sauvegarder
+                </p>
+              </div>
+              <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5">
+                <div>
+                  <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">Message LinkedIn</p>
+                  <p className="text-sm leading-relaxed text-slate-700">{pendingPackResult.linkedInMessage}</p>
+                </div>
+                <div className="border-t border-slate-100 pt-4">
+                  <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">Pitch 30s</p>
+                  <p className="text-sm leading-relaxed text-slate-700">{pendingPackResult.pitch30s}</p>
+                </div>
+                <div className="border-t border-slate-100 pt-4">
+                  <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">Pourquoi toi</p>
+                  <p className="text-sm leading-relaxed text-slate-700">{pendingPackResult.whyYou}</p>
+                </div>
+                <div className="border-t border-slate-100 pt-4">
+                  <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">Pourquoi cette entreprise</p>
+                  <p className="text-sm leading-relaxed text-slate-700">{pendingPackResult.whyCompany}</p>
+                </div>
+                {pendingPackResult.probableQuestions.length > 0 && (
+                  <div className="border-t border-slate-100 pt-4">
+                    <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">Questions probables</p>
+                    <ul className="flex flex-col gap-1">
+                      {pendingPackResult.probableQuestions.slice(0, 3).map((q, i) => (
+                        <li key={i} className="text-sm leading-relaxed text-slate-700">• {q}</li>
+                      ))}
+                      {pendingPackResult.probableQuestions.length > 3 && (
+                        <li className="text-xs text-slate-400">+ {pendingPackResult.probableQuestions.length - 3} autres</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    saveApplicationPack(pendingPackResult)
+                    setPendingPackResult(null)
+                    setPackGenerationState("done")
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-3 text-sm font-black text-white transition-colors hover:bg-violet-700"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Confirmer et sauvegarder
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingPackResult(null)
+                    setPackGenerationState("idle")
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Rejeter
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Ce pack sera sauvegardé uniquement après ta confirmation. Il ne marque pas la candidature comme envoyée.
+              </p>
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-20 text-center gap-5 px-8">
               <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center">
