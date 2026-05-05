@@ -1,0 +1,73 @@
+import type { ActionItem } from "@/types"
+
+export const mockActions: ActionItem[] = [
+  {
+    id: "action-1",
+    title: "Générer le CV ciblé Ops pour Pennylane",
+    type: "generate_cv",
+    priority: "critical",
+    linkedJobOfferId: "job-1",
+    dueDate: new Date().toISOString(),
+    status: "pending",
+    estimatedMinutes: 20,
+    energyLevel: "medium",
+    expectedImpact: "very_high",
+    description:
+      "Pennylane est ton meilleur match aujourd'hui (86/100). Le CV actuel est encore trop orienté 'Product'. Il faut un CV avec angle Strategy & Operations : mettre en avant OKRs, reporting board, coordination cross-équipes. L'offre a 2 jours.",
+  },
+  {
+    id: "action-2",
+    title: "Identifier un contact Pennylane avant de postuler",
+    type: "network",
+    priority: "high",
+    linkedJobOfferId: "job-1",
+    dueDate: new Date().toISOString(),
+    status: "pending",
+    estimatedMinutes: 15,
+    energyLevel: "low",
+    expectedImpact: "high",
+    description:
+      "Sans contact interne, tu rentres dans la masse. Cherche sur LinkedIn : 'Strategy Operations Pennylane' ou alumni de tes anciens employeurs. Un contact multiplie tes chances par 3.",
+  },
+  {
+    id: "action-3",
+    title: "Postuler à Alan Business Operations Manager",
+    type: "apply",
+    priority: "high",
+    linkedJobOfferId: "job-3",
+    dueDate: new Date().toISOString(),
+    status: "pending",
+    estimatedMinutes: 25,
+    energyLevel: "high",
+    expectedImpact: "high",
+    description:
+      "Le CV ciblé Alan est prêt. Fit 81/100, accès correct. Business Operations Manager correspond exactement à ton expérience Launchr. Postuler maintenant.",
+  },
+  {
+    id: "action-4",
+    title: "Préparer le repositionnement Product → Ops",
+    type: "prepare_interview",
+    priority: "medium",
+    linkedJobOfferId: null,
+    dueDate: new Date().toISOString(),
+    status: "pending",
+    estimatedMinutes: 30,
+    energyLevel: "high",
+    expectedImpact: "very_high",
+    description:
+      "La question 'Pourquoi quitter le Product pour aller en Ops ?' arrivera à chaque entretien. Prépare une réponse courte, honnête et confiante. C'est l'objection la plus critique de ta recherche.",
+  },
+  {
+    id: "action-5",
+    title: "Relancer le contact chez Spendesk",
+    type: "follow_up",
+    priority: "medium",
+    linkedJobOfferId: null,
+    dueDate: new Date().toISOString(),
+    status: "pending",
+    estimatedMinutes: 10,
+    energyLevel: "low",
+    expectedImpact: "medium",
+    description: "Message envoyé il y a 7 jours, pas de réponse. Relance courte et professionnelle. 2 phrases max.",
+  },
+]
