@@ -639,10 +639,33 @@ export const useAppStore = create<AppState>()(
 
         const state = persistedState as Partial<AppState>
 
+        const rawProfile = state.profile ?? mockProfile
+        const safeProfile: UserProfile = {
+          ...rawProfile,
+          achievements: Array.isArray((rawProfile as Partial<UserProfile>).achievements)
+            ? rawProfile.achievements
+            : [],
+          proofPoints: Array.isArray((rawProfile as Partial<UserProfile>).proofPoints)
+            ? rawProfile.proofPoints
+            : [],
+          experiences: Array.isArray((rawProfile as Partial<UserProfile>).experiences)
+            ? rawProfile.experiences
+            : [],
+          objections: Array.isArray((rawProfile as Partial<UserProfile>).objections)
+            ? rawProfile.objections
+            : [],
+          targetTitles: Array.isArray((rawProfile as Partial<UserProfile>).targetTitles)
+            ? rawProfile.targetTitles
+            : [],
+          skills: Array.isArray((rawProfile as Partial<UserProfile>).skills)
+            ? rawProfile.skills
+            : [],
+        }
+
         return {
           ...state,
           applications: Array.isArray(state.applications) ? state.applications : mockApplications,
-          profile: state.profile ?? mockProfile,
+          profile: safeProfile,
           opportunities: Array.isArray(state.opportunities) ? state.opportunities : mockOpportunities,
           applicationEvents: Array.isArray(state.applicationEvents)
             ? state.applicationEvents
