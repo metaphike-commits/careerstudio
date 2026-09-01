@@ -98,6 +98,16 @@ export interface StarExample {
   linkedSkills: string[]
 }
 
+export interface StructuredExperience {
+  company: string
+  title: string
+  startYear: string
+  endYear: string
+  isCurrent: boolean
+  description: string
+  achievements: string[]
+}
+
 export interface ProfileIntelligence {
   seniority: string
   seniorityConfidence: ProfileIntelligenceConfidence
@@ -112,6 +122,7 @@ export interface ProfileIntelligence {
   atsKeywords: string[]
   progressionAxes: string[]
   source: "local_profile" | "llm_reviewed" | "manual"
+  structuredExperiences?: StructuredExperience[]
 }
 
 export type CalibrationLevel = "blocking" | "weak"

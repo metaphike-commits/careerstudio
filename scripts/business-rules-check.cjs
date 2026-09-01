@@ -2394,6 +2394,421 @@ test("profileSource is set to demo on mockProfile and not overwritten by resetDe
   assert.equal(profile.profileSource, "demo")
 })
 
+// ─── content-quality guard-rails ──────────────────────────────────────────────
+
+const {
+  isLikelyRawCVDump,
+  cleanProofPoint,
+  cleanAchievement,
+  MAX_PROOF_POINT_LENGTH,
+  MAX_ACHIEVEMENT_LENGTH,
+} = require("../src/lib/content-quality.ts")
+
+const { parseProfileIntelligenceJson } = require("../src/lib/llm/profile-intelligence.ts")
+
+test("isLikelyRawCVDump detects text longer than 350 chars as a dump", () => {
+  const longText = "a".repeat(351)
+  assert.equal(isLikelyRawCVDump(longText), true)
+})
+
+test("isLikelyRawCVDump returns false for a normal short proof point", () => {
+  const proof = "Reduit les failed deliveries de 11% via analyse terrain et repositionnement des flux logistiques."
+  assert.equal(isLikelyRawCVDump(proof), false)
+})
+
+test("isLikelyRawCVDump detects 3 or more year patterns as a dump", () => {
+  const multiYear = "Operations Lead 2019-2021, Product Manager 2021-2023, Consultant 2023-present."
+  assert.equal(isLikelyRawCVDump(multiYear), true)
+})
+
+test("isLikelyRawCVDump detects multiple legal entity suffixes as a dump", () => {
+  const multiCompany = "Worked at Acme Inc and BetaCorp Ltd delivering results."
+  assert.equal(isLikelyRawCVDump(multiCompany), true)
+})
+
+test("isLikelyRawCVDump detects email address as a dump", () => {
+  const withEmail = "Contact: hamza@example.com — available immediately."
+  assert.equal(isLikelyRawCVDump(withEmail), true)
+})
+
+test("isLikelyRawCVDump detects linkedin URL as a dump", () => {
+  const withLinkedin = "Profile: linkedin.com/in/hamza — 8 years experience."
+  assert.equal(isLikelyRawCVDump(withLinkedin), true)
+})
+
+test("cleanProofPoint returns null for a raw CV dump", () => {
+  const dump = "a".repeat(400)
+  assert.equal(cleanProofPoint(dump), null)
+})
+
+test("cleanProofPoint truncates a proof point exceeding MAX_PROOF_POINT_LENGTH", () => {
+  const longProof = "Genere " + "a".repeat(MAX_PROOF_POINT_LENGTH)
+  const result = cleanProofPoint(longProof)
+  assert.ok(result !== null, "should not return null for a long but non-dump text")
+  assert.ok(result.length <= MAX_PROOF_POINT_LENGTH, `result length ${result.length} exceeds max ${MAX_PROOF_POINT_LENGTH}`)
+  assert.ok(result.endsWith("..."), "truncated text should end with ...")
+})
+
+test("cleanProofPoint returns the original text if short and clean", () => {
+  const proof = "700 000 EUR d'economies via optimisation des couts logistiques."
+  assert.equal(cleanProofPoint(proof), proof)
+})
+
+test("cleanProofPoint returns null for empty or blank text", () => {
+  assert.equal(cleanProofPoint(""), null)
+  assert.equal(cleanProofPoint("   "), null)
+})
+
+test("a displayable proof point never exceeds MAX_PROOF_POINT_LENGTH chars", () => {
+  const proofs = [
+    "Reduit les couts de 15% en 6 mois.",
+    "a".repeat(300),
+    "Genere 700k EUR d'economies via optimisation des flux.",
+    "Operations Lead 2019 at Acme Inc, then 2021 at BetaCorp Ltd, 2023 at GammaGroup SA.",
+  ]
+  for (const proof of proofs) {
+    const cleaned = cleanProofPoint(proof)
+    if (cleaned !== null) {
+      assert.ok(
+        cleaned.length <= MAX_PROOF_POINT_LENGTH,
+        `proof point of length ${cleaned.length} exceeds max ${MAX_PROOF_POINT_LENGTH}: "${cleaned.slice(0, 60)}..."`
+      )
+    }
+  }
+})
+
+test("parseCVToProfile with 0 experiences despite Experience section has non-strong quality", () => {
+  // Simulate a CV that has an EXPERIENCE header but no parseable entries
+  const cvWithSectionButNoEntries = `
+John Doe
+Strategic Consultant
+
+COMPETENCES
+Strategy, Finance, Operations, Negotiation, Leadership
+
+EXPERIENCE
+
+EDUCATION
+HEC Paris - MBA 2018
+`
+  const result = parseCVToProfile(cvWithSectionButNoEntries)
+  // If hasExperienceSection is true and experiences.length is 0, quality must not be "strong"
+  if (result.hasExperienceSection && result.experiences.length === 0) {
+    assert.notEqual(
+      result.extractionQuality,
+      "strong",
+      "extractionQuality should not be strong when 0 experiences detected despite Experience section"
+    )
+  }
+})
+
+test("intelligenceToReviewDraft does not crash on minimal or missing fields", () => {
+  // Simulate a minimal ProfileIntelligence with missing optional arrays
+  const minimalIntel = {
+    seniority: "Senior",
+    seniorityConfidence: "medium",
+    targetRoleFamilies: [],
+    avoidRoleFamilies: [],
+    sectorFit: [],
+    coreStrengths: [],
+    impactProofs: [],
+    likelyObjections: [],
+    pitch: { short: "", recruiter: "", interview: "" },
+    starExamples: [],
+    atsKeywords: [],
+    progressionAxes: [],
+    source: "llm_reviewed",
+  }
+
+  // Run the same mapping logic used in onboarding/page.tsx
+  function intelligenceToReviewDraftLocal(intel) {
+    return {
+      name: "",
+      targetTitles: (intel.targetRoleFamilies ?? []).join(", "),
+      skills: (intel.coreStrengths ?? []).join(", "),
+      positioningStatement: intel.pitch?.short ?? "",
+      experiences: [],
+      proofPoints: (intel.impactProofs ?? [])
+        .map((text) => cleanProofPoint(text))
+        .filter((text) => text !== null)
+        .map((text) => ({ text, linkedSkill: "", keep: true })),
+    }
+  }
+
+  const draft = intelligenceToReviewDraftLocal(minimalIntel)
+  assert.equal(draft.name, "")
+  assert.equal(draft.targetTitles, "")
+  assert.equal(draft.skills, "")
+  assert.equal(draft.positioningStatement, "")
+  assert.deepEqual(draft.experiences, [])
+  assert.deepEqual(draft.proofPoints, [])
+})
+
+test("intelligenceToReviewDraft does not crash when pitch is missing", () => {
+  const intelWithoutPitch = {
+    seniority: "Mid",
+    seniorityConfidence: "low",
+    targetRoleFamilies: ["Product Manager"],
+    avoidRoleFamilies: [],
+    sectorFit: ["Tech"],
+    coreStrengths: ["Product Strategy", "Roadmap"],
+    impactProofs: ["Launched feature used by 50k users."],
+    likelyObjections: [],
+    pitch: null,
+    starExamples: [],
+    atsKeywords: ["Agile", "OKRs"],
+    progressionAxes: [],
+    source: "llm_reviewed",
+  }
+
+  function intelligenceToReviewDraftLocal(intel) {
+    return {
+      name: "",
+      targetTitles: (intel.targetRoleFamilies ?? []).join(", "),
+      skills: (intel.coreStrengths ?? []).join(", "),
+      positioningStatement: intel.pitch?.short ?? "",
+      experiences: [],
+      proofPoints: (intel.impactProofs ?? [])
+        .map((text) => cleanProofPoint(text))
+        .filter((text) => text !== null)
+        .map((text) => ({ text, linkedSkill: "", keep: true })),
+    }
+  }
+
+  let draft
+  assert.doesNotThrow(() => {
+    draft = intelligenceToReviewDraftLocal(intelWithoutPitch)
+  })
+  assert.equal(draft.positioningStatement, "")
+  assert.equal(draft.proofPoints.length, 1)
+})
+
+test("local fallback does not retain proof points that are raw CV dumps", () => {
+  const cvWithLongBullets = `
+Marie Dupont
+Operations Director
+
+COMPETENCES
+Strategy, Operations, Finance, Logistics, Leadership, Excel, SQL, PowerBI, Tableau, JIRA
+
+EXPERIENCE
+Operations Director - Acme Corp 2020-2023
+- Managed team of 15 across 4 countries including France Germany Spain Italy with a budget of 2M EUR and reduced costs by 12% over 3 years through process improvement and vendor renegotiation. Also responsible for quarterly reporting to C-suite and board presentations twice per year. Led digital transformation initiative spanning ERP CRM and WMS platforms with 40 external stakeholders and 3 system integrators. Generated 700000 EUR savings in year one.
+- Standard short bullet with a 15% metric.
+
+EDUCATION
+Sciences Po Paris 2015
+`
+  const result = parseCVToProfile(cvWithLongBullets)
+
+  // Apply the same cleanProofPoint filter used in onboarding
+  const cleanedProofPoints = result.proofPoints
+    .map((pp) => cleanProofPoint(pp.text))
+    .filter((t) => t !== null)
+
+  for (const proof of cleanedProofPoints) {
+    assert.ok(
+      proof.length <= MAX_PROOF_POINT_LENGTH,
+      `Proof point exceeds max length after cleaning: "${proof.slice(0, 80)}..."`
+    )
+  }
+})
+
+// ─── cleanAchievement + structuredExperiences ─────────────────────────────────
+
+test("cleanAchievement returns null for empty or blank text", () => {
+  assert.equal(cleanAchievement(""), null)
+  assert.equal(cleanAchievement("   "), null)
+})
+
+test("cleanAchievement returns null for raw CV dump", () => {
+  const dump = "Managed team at Acme Inc then moved to BetaCorp Ltd, 2019-2021 then 2021-2023, handled budgets."
+  assert.equal(cleanAchievement(dump), null)
+})
+
+test("cleanAchievement truncates achievement exceeding MAX_ACHIEVEMENT_LENGTH", () => {
+  const long = "Reduit les couts de 15% en optimisant " + "a".repeat(MAX_ACHIEVEMENT_LENGTH)
+  const result = cleanAchievement(long)
+  assert.ok(result !== null, "should not return null for a long but valid text")
+  assert.ok(result.length <= MAX_ACHIEVEMENT_LENGTH, `length ${result.length} exceeds max ${MAX_ACHIEVEMENT_LENGTH}`)
+  assert.ok(result.endsWith("..."), "should end with ...")
+})
+
+test("cleanAchievement returns original text when short and clean", () => {
+  const short = "Reduit les couts logistiques de 12% en 6 mois."
+  assert.equal(cleanAchievement(short), short)
+})
+
+test("parseProfileIntelligenceJson maps structuredExperiences from LLM output", () => {
+  const json = JSON.stringify({
+    seniority: "Senior Manager",
+    seniorityConfidence: "high",
+    targetRoleFamilies: ["Operations Director"],
+    avoidRoleFamilies: [],
+    sectorFit: ["Tech", "Finance"],
+    coreStrengths: ["Leadership", "Process Optimization"],
+    impactProofs: ["Reduit les couts de 500k EUR."],
+    likelyObjections: ["Pas de titre VP"],
+    pitch: { short: "Expert ops.", recruiter: "Recruteur pitch.", interview: "Entretien pitch." },
+    starExamples: [],
+    atsKeywords: ["OKRs", "SQL"],
+    progressionAxes: ["VP Operations"],
+    structuredExperiences: [
+      {
+        company: "Acme Corp",
+        title: "Operations Lead",
+        startYear: "2021",
+        endYear: "2023",
+        isCurrent: false,
+        description: "Dirige l'equipe ops sur 3 pays.",
+        achievements: ["Reduit les couts de 15%.", "Manage une equipe de 10 personnes."],
+      },
+      {
+        company: "BetaCorp",
+        title: "Project Manager",
+        startYear: "2018",
+        endYear: "2021",
+        isCurrent: false,
+        description: "Gestion de projets transverses.",
+        achievements: ["Livre 3 projets dans les delais.", "Reduit les delais de livraison de 20%."],
+      },
+    ],
+    source: "llm_reviewed",
+  })
+
+  const result = parseProfileIntelligenceJson(json)
+  assert.ok(result !== null, "should parse successfully")
+  assert.ok(Array.isArray(result.structuredExperiences), "structuredExperiences should be an array")
+  assert.equal(result.structuredExperiences.length, 2, "should have 2 experiences")
+  assert.equal(result.structuredExperiences[0].company, "Acme Corp")
+  assert.equal(result.structuredExperiences[0].title, "Operations Lead")
+  assert.equal(result.structuredExperiences[0].startYear, "2021")
+  assert.equal(result.structuredExperiences[0].endYear, "2023")
+  assert.equal(result.structuredExperiences[0].isCurrent, false)
+  assert.equal(result.structuredExperiences[0].achievements.length, 2)
+  assert.equal(result.structuredExperiences[1].company, "BetaCorp")
+})
+
+test("parseProfileIntelligenceJson handles missing structuredExperiences gracefully", () => {
+  const json = JSON.stringify({
+    seniority: "Senior",
+    seniorityConfidence: "medium",
+    targetRoleFamilies: ["Manager"],
+    avoidRoleFamilies: [],
+    sectorFit: [],
+    coreStrengths: ["Leadership"],
+    impactProofs: [],
+    likelyObjections: [],
+    pitch: { short: "Expert.", recruiter: "Pitch.", interview: "Pitch." },
+    starExamples: [],
+    atsKeywords: [],
+    progressionAxes: [],
+    source: "llm_reviewed",
+    // structuredExperiences intentionally absent
+  })
+
+  let result
+  assert.doesNotThrow(() => { result = parseProfileIntelligenceJson(json) })
+  assert.ok(result !== null)
+  assert.ok(result.structuredExperiences === undefined || Array.isArray(result.structuredExperiences))
+})
+
+test("normalizer rejects experience entry with both company and title empty", () => {
+  const json = JSON.stringify({
+    seniority: "Mid",
+    seniorityConfidence: "low",
+    targetRoleFamilies: ["Analyst"],
+    avoidRoleFamilies: [],
+    sectorFit: [],
+    coreStrengths: [],
+    impactProofs: [],
+    likelyObjections: [],
+    pitch: { short: ".", recruiter: ".", interview: "." },
+    starExamples: [],
+    atsKeywords: [],
+    progressionAxes: [],
+    structuredExperiences: [
+      { company: "", title: "", startYear: "", endYear: "", isCurrent: false, description: "", achievements: [] },
+      { company: "Acme", title: "Analyst", startYear: "2020", endYear: "2022", isCurrent: false, description: "Role.", achievements: ["Delivered on time."] },
+    ],
+    source: "llm_reviewed",
+  })
+
+  const result = parseProfileIntelligenceJson(json)
+  assert.ok(result !== null)
+  // empty company+title entry should be filtered out
+  assert.equal(result.structuredExperiences.length, 1)
+  assert.equal(result.structuredExperiences[0].company, "Acme")
+})
+
+test("normalizer filters out achievements longer than 250 chars from LLM response", () => {
+  const longAchievement = "Achieved ".repeat(40) // >250 chars
+  const json = JSON.stringify({
+    seniority: "Senior",
+    seniorityConfidence: "high",
+    targetRoleFamilies: ["Director"],
+    avoidRoleFamilies: [],
+    sectorFit: [],
+    coreStrengths: [],
+    impactProofs: [],
+    likelyObjections: [],
+    pitch: { short: ".", recruiter: ".", interview: "." },
+    starExamples: [],
+    atsKeywords: [],
+    progressionAxes: [],
+    structuredExperiences: [
+      {
+        company: "Acme",
+        title: "Director",
+        startYear: "2020",
+        endYear: "2023",
+        isCurrent: false,
+        description: "Led ops.",
+        achievements: [longAchievement, "Reduit les couts de 12%."],
+      },
+    ],
+    source: "llm_reviewed",
+  })
+
+  const result = parseProfileIntelligenceJson(json)
+  assert.ok(result !== null)
+  const achievements = result.structuredExperiences[0].achievements
+  // long achievement (>250 chars) should be filtered at normalizer level
+  for (const a of achievements) {
+    assert.ok(a.length <= 250, `achievement of length ${a.length} should have been filtered`)
+  }
+  // short achievement should be kept
+  assert.ok(achievements.some((a) => a.includes("12%")))
+})
+
+test("experience without dates does not crash the normalizer", () => {
+  const json = JSON.stringify({
+    seniority: "Junior",
+    seniorityConfidence: "low",
+    targetRoleFamilies: ["Analyst"],
+    avoidRoleFamilies: [],
+    sectorFit: [],
+    coreStrengths: [],
+    impactProofs: [],
+    likelyObjections: [],
+    pitch: { short: ".", recruiter: ".", interview: "." },
+    starExamples: [],
+    atsKeywords: [],
+    progressionAxes: [],
+    structuredExperiences: [
+      { company: "Startup", title: "Dev", startYear: "", endYear: "", isCurrent: true, description: "", achievements: [] },
+    ],
+    source: "llm_reviewed",
+  })
+
+  let result
+  assert.doesNotThrow(() => { result = parseProfileIntelligenceJson(json) })
+  assert.ok(result !== null)
+  assert.equal(result.structuredExperiences[0].company, "Startup")
+  assert.equal(result.structuredExperiences[0].startYear, "")
+  assert.equal(result.structuredExperiences[0].isCurrent, true)
+})
+
 let passed = 0;
 
 (async () => {

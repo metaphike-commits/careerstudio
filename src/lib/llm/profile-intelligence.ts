@@ -1,4 +1,4 @@
-import type { ProfileIntelligence, UserProfile } from "@/types"
+import type { ProfileIntelligence, StructuredExperience, UserProfile } from "@/types"
 import {
   getConfiguredLLMProvider,
   hasUsableProviderKey,
@@ -35,9 +35,32 @@ function stringArray(value: unknown, maxItems: number) {
   return value.map((item) => String(item).trim()).filter(Boolean).slice(0, maxItems)
 }
 
+function normalizeStructuredExperience(item: unknown): StructuredExperience | null {
+  if (!item || typeof item !== "object") return null
+  const exp = item as Record<string, unknown>
+  const company = typeof exp.company === "string" ? exp.company.trim() : ""
+  const title = typeof exp.title === "string" ? exp.title.trim() : ""
+  if (!company && !title) return null
+  const startYear =
+    typeof exp.startYear === "string" ? exp.startYear.trim().slice(0, 4) :
+    typeof exp.startYear === "number" ? String(exp.startYear).slice(0, 4) : ""
+  const endYear =
+    typeof exp.endYear === "string" ? exp.endYear.trim().slice(0, 4) :
+    typeof exp.endYear === "number" ? String(exp.endYear).slice(0, 4) : ""
+  const isCurrent = Boolean(exp.isCurrent)
+  const description = typeof exp.description === "string" ? exp.description.trim().slice(0, 300) : ""
+  const achievements = Array.isArray(exp.achievements)
+    ? (exp.achievements as unknown[])
+        .map((a) => (typeof a === "string" ? a.trim() : ""))
+        .filter((a) => a.length > 5 && a.length <= 250)
+        .slice(0, 6)
+    : []
+  return { company, title, startYear, endYear, isCurrent, description, achievements }
+}
+
 function normalizeProfileIntelligence(value: unknown, fallbackProfile?: UserProfile): ProfileIntelligence | null {
   if (!value || typeof value !== "object") return null
-  const parsed = value as Partial<ProfileIntelligence>
+  const parsed = value as Partial<ProfileIntelligence> & Record<string, unknown>
   const fallback = fallbackProfile ? createProfileIntelligence(fallbackProfile) : null
 
   const seniority = isNonEmptyString(parsed.seniority) ? parsed.seniority : fallback?.seniority
@@ -90,6 +113,12 @@ function normalizeProfileIntelligence(value: unknown, fallbackProfile?: UserProf
       ? stringArray(parsed.progressionAxes, 12)
       : fallback?.progressionAxes ?? [],
     source: SOURCE_VALUES.has(String(parsed.source)) ? parsed.source! : "llm_reviewed",
+    structuredExperiences: Array.isArray(parsed.structuredExperiences)
+      ? (parsed.structuredExperiences as unknown[])
+          .map(normalizeStructuredExperience)
+          .filter((exp): exp is StructuredExperience => exp !== null)
+          .slice(0, 15)
+      : undefined,
   }
 }
 
@@ -168,6 +197,7 @@ Contraintes:
 - Les starExamples doivent venir d'experiences concretes du CV et couvrir Situation, Task, Action, Result.
 - Les atsKeywords doivent melanger intitules cibles, competences metier, outils, secteurs et mots-cles ATS.
 - Vise une sortie riche mais concise: 5-8 roles cibles, 5-8 forces, 5-8 preuves, 4-6 objections, 4-6 STAR, 15-24 mots-cles ATS.
+- structuredExperiences: extraire toutes les experiences professionnelles du CV, dans l'ordre chronologique inverse. Pour chaque experience: company, title, startYear (AAAA ou vide), endYear (AAAA ou vide), isCurrent (bool), description (1-2 phrases max, 250 chars max), achievements (3-5 realisations, chacune 200 chars max, avec chiffre si present). Ne pas inventer. Si une info manque, laisser la chaine vide. Ne pas coller plusieurs experiences dans un seul champ. Ne pas copier des blocs entiers de CV.
 - Langue: francais professionnel, clair, direct.
 
 Format exact:
@@ -196,6 +226,15 @@ Format exact:
   }],
   "atsKeywords": ["string"],
   "progressionAxes": ["string"],
+  "structuredExperiences": [{
+    "company": "string",
+    "title": "string",
+    "startYear": "AAAA ou vide",
+    "endYear": "AAAA ou vide",
+    "isCurrent": false,
+    "description": "1-2 phrases max",
+    "achievements": ["realisation courte avec chiffre si disponible"]
+  }],
   "source": "llm_reviewed"
 }
 
@@ -222,7 +261,7 @@ export async function generateProfileIntelligenceWithAnthropic(
     },
     body: JSON.stringify({
       model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
-      max_tokens: 2600,
+      max_tokens: 4000,
       temperature: 0.2,
       messages: [{ role: "user", content: buildProfileIntelligencePrompt(body) }],
     }),
@@ -248,7 +287,7 @@ export async function generateProfileIntelligenceWithOpenAI(
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL ?? "gpt-5.4-mini",
       input: buildProfileIntelligencePrompt(body),
-      max_output_tokens: 2600,
+      max_output_tokens: 4000,
       text: {
         format: {
           type: "json_schema",
@@ -296,6 +335,24 @@ export async function generateProfileIntelligenceWithOpenAI(
               },
               atsKeywords: { type: "array", items: { type: "string" }, maxItems: 30 },
               progressionAxes: { type: "array", items: { type: "string" }, maxItems: 12 },
+              structuredExperiences: {
+                type: "array",
+                maxItems: 15,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    company: { type: "string" },
+                    title: { type: "string" },
+                    startYear: { type: "string" },
+                    endYear: { type: "string" },
+                    isCurrent: { type: "boolean" },
+                    description: { type: "string" },
+                    achievements: { type: "array", items: { type: "string" }, maxItems: 5 },
+                  },
+                  required: ["company", "title", "startYear", "endYear", "isCurrent", "description", "achievements"],
+                },
+              },
               source: { type: "string", enum: ["llm_reviewed"] },
             },
             required: [
@@ -311,6 +368,7 @@ export async function generateProfileIntelligenceWithOpenAI(
               "starExamples",
               "atsKeywords",
               "progressionAxes",
+              "structuredExperiences",
               "source",
             ],
           },

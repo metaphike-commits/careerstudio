@@ -9,16 +9,20 @@ import {
   CircleDot,
   FileText,
   Plus,
+  RefreshCw,
   ShieldCheck,
+  Sparkles,
   X,
   Zap,
 } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { parseCVToProfile, type CandidateProofPoint, type Confidence, type ParsedCV } from "@/lib/cv-parser"
 import { extractPDFText, isPDFFile, PDFExtractError } from "@/lib/pdf-extract"
-import type { MasterCV } from "@/types"
+import { cleanAchievement, cleanProofPoint } from "@/lib/content-quality"
+import type { MasterCV, ProfileIntelligence } from "@/types"
 
 type Step = "paste" | "review"
+type AnalysisSource = "ai" | "local" | null
 
 interface ExperienceRow {
   company: string
@@ -43,6 +47,74 @@ interface ReviewDraft {
   positioningStatement: string
   experiences: ExperienceRow[]
   proofPoints: ProofPointDraft[]
+}
+
+// ─── API error mapping ─────────────────────────────────────────────────────────
+
+function mapAPIError(status: number, errorMsg: string): string {
+  if (status === 503) {
+    if (/manquante|API|key/i.test(errorMsg)) {
+      return "Clé API manquante ou invalide. Configurez votre clé dans les Paramètres ou .env.local."
+    }
+    return "Service IA indisponible. Vérifiez votre configuration dans les Paramètres."
+  }
+  if (status === 502) {
+    return "Le provider IA a rejeté la requête. Vérifiez votre quota ou le modèle configuré dans .env.local."
+  }
+  if (status === 400) {
+    return "Le CV est trop court pour être analysé. Ajoutez plus de contenu (minimum 80 caractères)."
+  }
+  return `Erreur inattendue (${status}). Réessayez ou continuez en analyse locale.`
+}
+
+// ─── Draft builders ────────────────────────────────────────────────────────────
+
+function intelligenceToReviewDraft(intel: ProfileIntelligence): ReviewDraft {
+  return {
+    name: "",
+    targetTitles: (intel.targetRoleFamilies ?? []).join(", "),
+    skills: (intel.coreStrengths ?? []).join(", "),
+    positioningStatement: intel.pitch?.short ?? "",
+    experiences: (intel.structuredExperiences ?? []).map((exp) => ({
+      company: exp.company,
+      title: exp.title,
+      startYear: exp.startYear,
+      endYear: exp.endYear,
+      isCurrent: exp.isCurrent,
+      description: exp.description,
+      achievements: exp.achievements
+        .map(cleanAchievement)
+        .filter((a): a is string => a !== null),
+    })),
+    proofPoints: (intel.impactProofs ?? [])
+      .map((text) => cleanProofPoint(text))
+      .filter((text): text is string => text !== null)
+      .map((text) => ({ text, linkedSkill: "", keep: true })),
+  }
+}
+
+function parsedToReviewDraft(parsed: ParsedCV): ReviewDraft {
+  return {
+    name: parsed.name.value ?? "",
+    targetTitles: (parsed.targetTitles.value ?? []).join(", "),
+    skills: parsed.skills.join(", "),
+    positioningStatement: parsed.positioningStatement.value ?? "",
+    experiences: parsed.experiences.map((exp) => ({
+      company: exp.company,
+      title: exp.title,
+      startYear: exp.startYear ? String(exp.startYear) : "",
+      endYear: exp.endYear ? String(exp.endYear) : "",
+      isCurrent: exp.isCurrent,
+      description: exp.description,
+      achievements: exp.achievements,
+    })),
+    proofPoints: parsed.proofPoints
+      .map((pp) => {
+        const cleaned = cleanProofPoint(pp.text)
+        return cleaned !== null ? { text: cleaned, linkedSkill: pp.linkedSkill ?? "", keep: true } : null
+      })
+      .filter((pp): pp is ProofPointDraft => pp !== null),
+  }
 }
 
 // ─── Confidence badge ──────────────────────────────────────────────────────────
@@ -89,29 +161,6 @@ function proofPointsConfidence(pp: CandidateProofPoint[]): Confidence {
   return "missing"
 }
 
-function parsedToReviewDraft(parsed: ParsedCV): ReviewDraft {
-  return {
-    name: parsed.name.value ?? "",
-    targetTitles: (parsed.targetTitles.value ?? []).join(", "),
-    skills: parsed.skills.join(", "),
-    positioningStatement: parsed.positioningStatement.value ?? "",
-    experiences: parsed.experiences.map((exp) => ({
-      company: exp.company,
-      title: exp.title,
-      startYear: exp.startYear ? String(exp.startYear) : "",
-      endYear: exp.endYear ? String(exp.endYear) : "",
-      isCurrent: exp.isCurrent,
-      description: exp.description,
-      achievements: exp.achievements,
-    })),
-    proofPoints: parsed.proofPoints.map((pp) => ({
-      text: pp.text,
-      linkedSkill: pp.linkedSkill ?? "",
-      keep: true,
-    })),
-  }
-}
-
 function missingFields(parsed: ParsedCV): string[] {
   const missing: string[] = []
   if (!parsed.name.value) missing.push("Nom")
@@ -122,7 +171,7 @@ function missingFields(parsed: ParsedCV): string[] {
   return missing
 }
 
-// ─── Summary card ──────────────────────────────────────────────────────────────
+// ─── Summary cards ─────────────────────────────────────────────────────────────
 
 function ExtractionSummary({ parsed }: { parsed: ParsedCV }) {
   const qualityConfig = {
@@ -139,6 +188,9 @@ function ExtractionSummary({ parsed }: { parsed: ParsedCV }) {
       <div className="flex items-center gap-2">
         <Icon className={`w-4 h-4 shrink-0 ${q.iconCls}`} />
         <span className="text-sm font-semibold">{q.label}</span>
+        <span className="ml-auto text-xs font-medium px-2 py-0.5 rounded bg-white/60 text-amber-800">
+          Analyse locale limitée
+        </span>
       </div>
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
         <span>
@@ -156,10 +208,26 @@ function ExtractionSummary({ parsed }: { parsed: ParsedCV }) {
           </span>
         )}
         {parsed.hasExperienceSection && parsed.experiences.length === 0 && (
-          <span className="col-span-2 mt-1 text-amber-700">
-            Section Experience detectee, mais aucune experience n&apos;a pu etre structuree. Verifie le format ou corrige manuellement.
+          <span className="col-span-2 mt-1 font-semibold text-rose-700">
+            Section Experience detectee mais aucune experience structuree — ajoutez manuellement ou activez l&apos;IA pour une meilleure extraction.
           </span>
         )}
+      </div>
+    </div>
+  )
+}
+
+function AIAnalysisBanner() {
+  return (
+    <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 flex items-start gap-3">
+      <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center shrink-0 mt-0.5">
+        <Sparkles className="w-4 h-4 text-violet-600" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-violet-800">Profil synthétisé par l&apos;IA</p>
+        <p className="text-xs text-violet-700 mt-1 leading-relaxed">
+          Vérifiez et corrigez les champs. Le nom et les expériences ne sont pas extraits par l&apos;IA — complétez-les si nécessaire. Seules les valeurs validées ici seront sauvegardées.
+        </p>
       </div>
     </div>
   )
@@ -172,14 +240,18 @@ export default function OnboardingPage() {
   const [cvText, setCvText] = useState("")
   const [parsed, setParsed] = useState<ParsedCV | null>(null)
   const [draft, setDraft] = useState<ReviewDraft | null>(null)
+  const [aiIntelligence, setAiIntelligence] = useState<ProfileIntelligence | null>(null)
+  const [analysisSource, setAnalysisSource] = useState<AnalysisSource>(null)
   const [weakConfirmed, setWeakConfirmed] = useState(false)
   const [pdfSource, setPdfSource] = useState<{ fileName: string; pageCount: number } | null>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [isExtracting, setIsExtracting] = useState(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [aiError, setAiError] = useState<{ message: string } | null>(null)
   const [pdfFileName, setPdfFileName] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const { saveProfileAndRescore, setMasterCV, profile } = useAppStore()
+  const { saveProfileAndRescore, setMasterCV, profile, aiEnabled } = useAppStore()
   const router = useRouter()
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -209,17 +281,67 @@ export default function OnboardingPage() {
     }
   }
 
-  const handleAnalyze = () => {
-    if (!cvText.trim()) return
+  const runLocalAnalysis = () => {
     const result = parseCVToProfile(cvText)
     setParsed(result)
     setDraft(parsedToReviewDraft(result))
+    setAiIntelligence(null)
+    setAnalysisSource("local")
     setWeakConfirmed(false)
     setStep("review")
   }
 
+  const handleAnalyze = async () => {
+    if (!cvText.trim()) return
+    setAiError(null)
+
+    if (!aiEnabled) {
+      runLocalAnalysis()
+      return
+    }
+
+    setIsAnalyzing(true)
+    try {
+      const res = await fetch("/api/profile-intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cvText }),
+      })
+
+      if (!res.ok) {
+        let body: { error?: string } = {}
+        try {
+          body = (await res.json()) as { error?: string }
+        } catch {
+          // ignore parse failure
+        }
+        setAiError({ message: mapAPIError(res.status, body.error ?? "") })
+        return
+      }
+
+      const body = (await res.json()) as { profileIntelligence?: ProfileIntelligence }
+      if (!body.profileIntelligence) {
+        setAiError({
+          message: "La réponse IA est invalide ou incomplète. Réessayez ou continuez en analyse locale.",
+        })
+        return
+      }
+
+      setAiIntelligence(body.profileIntelligence)
+      setDraft(intelligenceToReviewDraft(body.profileIntelligence))
+      setParsed(null)
+      setAnalysisSource("ai")
+      setWeakConfirmed(false)
+      setStep("review")
+    } catch {
+      setAiError({ message: "Erreur réseau. Vérifiez votre connexion et réessayez." })
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
   const handleConfirm = () => {
-    if (!draft || !parsed || !profile) return
+    if (!draft || !profile) return
 
     const skills = draft.skills
       .split(",")
@@ -258,9 +380,9 @@ export default function OnboardingPage() {
               keywords: [],
             }))
           : profile.experiences,
-      // Only save explicitly kept proof points from CV; never reuse mock proof points
       proofPoints: keptProofPoints,
       objections: [],
+      ...(aiIntelligence ? { profileIntelligence: aiIntelligence } : {}),
     })
 
     const masterCV: MasterCV = {
@@ -310,7 +432,7 @@ export default function OnboardingPage() {
     setDraft({ ...draft, proofPoints: updated })
   }
 
-  const isWeak = parsed?.extractionQuality === "weak"
+  const isWeak = analysisSource === "local" && parsed?.extractionQuality === "weak"
 
   return (
     <div className="min-h-full app-premium-bg flex flex-col items-center justify-center px-6 py-12">
@@ -332,23 +454,43 @@ export default function OnboardingPage() {
             <div>
               <h1 className="text-[32px] font-black tracking-[-0.035em] text-slate-950">Importez votre CV</h1>
               <p className="text-base font-semibold text-slate-500 mt-2 leading-relaxed">
-                Importez un PDF ou collez le texte brut de votre CV. Le systeme extraira votre
-                nom, vos competences, vos experiences et vos preuves d&apos;impact.
+                Importez un PDF ou collez le texte brut de votre CV.
+                {aiEnabled
+                  ? " L'IA synthétisera votre profil complet."
+                  : " Le système extraira votre nom, compétences, expériences et preuves d'impact."}
               </p>
             </div>
 
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-start gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            {/* Context banner — changes based on AI state */}
+            {aiEnabled ? (
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-4 h-4 text-violet-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-violet-800">Analyse IA activée</p>
+                  <p className="text-xs text-violet-700 mt-1 leading-relaxed">
+                    Votre CV sera envoyé à votre provider IA configuré pour une synthèse de profil complète.
+                    Aucune donnée n&apos;est conservée par le provider au-delà de la requête.
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-semibold text-emerald-800">Traitement 100% local</p>
-                <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
-                  L&apos;analyse est faite dans votre navigateur. Aucune donnee n&apos;est envoyee
-                  a un serveur.
-                </p>
+            ) : (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-emerald-800">Traitement 100% local</p>
+                  <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
+                    L&apos;analyse est faite dans votre navigateur. Aucune donnée n&apos;est envoyée à un serveur.
+                    <span className="block mt-1 text-emerald-600">
+                      Activez l&apos;IA dans les Paramètres pour une analyse plus riche.
+                    </span>
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* PDF upload zone */}
             <div>
@@ -373,7 +515,7 @@ export default function OnboardingPage() {
                 <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                   <p className="text-xs font-medium text-emerald-800">
-                    PDF analyse localement — {pdfSource.fileName} ({pdfSource.pageCount} page{pdfSource.pageCount > 1 ? "s" : ""})
+                    PDF chargé — {pdfSource.fileName} ({pdfSource.pageCount} page{pdfSource.pageCount > 1 ? "s" : ""})
                   </p>
                 </div>
               )}
@@ -414,24 +556,65 @@ OKRs, Program Management, SQL, Cross-functional...`}
               />
             </div>
 
+            {/* AI error block */}
+            {aiError && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 space-y-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <p className="text-sm text-rose-700 leading-relaxed">{aiError.message}</p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => { setAiError(null); void handleAnalyze() }}
+                    disabled={isAnalyzing || cvText.trim().length < 50}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-100 text-rose-800 text-xs font-semibold hover:bg-rose-200 transition-colors disabled:opacity-40"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Réessayer
+                  </button>
+                  <button
+                    onClick={() => { setAiError(null); runLocalAnalysis() }}
+                    disabled={cvText.trim().length < 50}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-700 text-xs font-medium hover:bg-rose-50 transition-colors disabled:opacity-40"
+                  >
+                    Continuer en analyse locale limitée
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
                 {cvText.length > 0 ? `${cvText.length} caracteres` : "Texte brut uniquement — minimum 100 caracteres"}
               </p>
               <button
-                onClick={handleAnalyze}
-                disabled={cvText.trim().length < 50}
+                onClick={() => void handleAnalyze()}
+                disabled={cvText.trim().length < 50 || isAnalyzing || isExtracting}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                Analyser
-                <ChevronRight className="w-4 h-4" />
+                {isAnalyzing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Analyse en cours...
+                  </>
+                ) : aiEnabled ? (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Analyser avec IA
+                  </>
+                ) : (
+                  <>
+                    Analyser localement
+                    <ChevronRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </div>
           </div>
         )}
 
         {/* Step 2: Review */}
-        {step === "review" && parsed && draft && (
+        {step === "review" && draft && (
           <div className="space-y-6">
             <div>
               <h1 className="text-[32px] font-black tracking-[-0.035em] text-slate-950">Vérifiez le profil extrait</h1>
@@ -441,10 +624,14 @@ OKRs, Program Management, SQL, Cross-functional...`}
               </p>
             </div>
 
-            {/* Extraction summary */}
-            <ExtractionSummary parsed={parsed} />
+            {/* Source summary */}
+            {analysisSource === "ai" ? (
+              <AIAnalysisBanner />
+            ) : analysisSource === "local" && parsed ? (
+              <ExtractionSummary parsed={parsed} />
+            ) : null}
 
-            {/* Weak extraction confirmation */}
+            {/* Weak extraction confirmation — local only */}
             {isWeak && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
                 <div className="flex items-start gap-2">
@@ -478,7 +665,12 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">Nom</label>
-                  <ConfidenceBadge confidence={parsed.name.confidence} />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge confidence={parsed.name.confidence} />
+                  )}
+                  {analysisSource === "ai" && !draft.name && (
+                    <span className="text-xs text-amber-600 font-medium">À compléter</span>
+                  )}
                 </div>
                 <input
                   type="text"
@@ -493,13 +685,15 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">Titres cibles</label>
-                  <ConfidenceBadge
-                    confidence={
-                      (parsed.targetTitles.value?.length ?? 0) > 0
-                        ? parsed.targetTitles.confidence
-                        : "missing"
-                    }
-                  />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge
+                      confidence={
+                        (parsed.targetTitles.value?.length ?? 0) > 0
+                          ? parsed.targetTitles.confidence
+                          : "missing"
+                      }
+                    />
+                  )}
                 </div>
                 <input
                   type="text"
@@ -515,7 +709,9 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">Competences cles</label>
-                  <ConfidenceBadge confidence={skillsConfidence(parsed)} />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge confidence={skillsConfidence(parsed)} />
+                  )}
                 </div>
                 <textarea
                   value={draft.skills}
@@ -525,9 +721,9 @@ OKRs, Program Management, SQL, Cross-functional...`}
                   className="w-full px-3 py-2 rounded-lg border border-border bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
                 />
                 <p className="text-xs text-muted-foreground">
-                  {parsed.skills.length > 0
+                  {analysisSource === "local" && parsed && parsed.skills.length > 0
                     ? `${parsed.skills.length} competence(s) detectee(s) — separez par des virgules`
-                    : "Aucune competence detectee — saisissez manuellement"}
+                    : "Separez par des virgules"}
                 </p>
               </div>
 
@@ -535,7 +731,12 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">Positionnement</label>
-                  <ConfidenceBadge confidence={parsed.positioningStatement.confidence} />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge confidence={parsed.positioningStatement.confidence} />
+                  )}
+                  {analysisSource === "local" && parsed && !parsed.positioningStatement.value && (
+                    <span className="text-xs text-amber-600 font-medium ml-2">Non détecté — à compléter</span>
+                  )}
                 </div>
                 <textarea
                   value={draft.positioningStatement}
@@ -550,13 +751,28 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">Experiences</label>
-                  <ConfidenceBadge confidence={experiencesConfidence(parsed)} />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge confidence={experiencesConfidence(parsed)} />
+                  )}
                 </div>
-                {draft.experiences.length === 0 && (
+
+                {analysisSource === "ai" && draft.experiences.length > 0 && (
+                  <p className="text-xs text-violet-700 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+                    Expériences structurées par IA — vérifiez et corrigez si nécessaire.
+                  </p>
+                )}
+                {analysisSource === "ai" && draft.experiences.length === 0 && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    L&apos;IA n&apos;a pas pu structurer les expériences — ajoutez-les manuellement ci-dessous.
+                  </p>
+                )}
+
+                {draft.experiences.length === 0 && analysisSource !== "ai" && (
                   <p className="text-xs text-muted-foreground">
                     Aucune experience detectee — ajoutez-les manuellement.
                   </p>
                 )}
+
                 <div className="space-y-2">
                   {draft.experiences.map((exp, i) => (
                     <div key={i} className="rounded-lg border border-border bg-card p-3 space-y-2">
@@ -629,14 +845,20 @@ OKRs, Program Management, SQL, Cross-functional...`}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-semibold text-foreground">
-                    Preuves d&apos;impact detectees
+                    Preuves d&apos;impact
                   </label>
-                  <ConfidenceBadge confidence={proofPointsConfidence(parsed.proofPoints)} />
+                  {analysisSource === "local" && parsed && (
+                    <ConfidenceBadge confidence={proofPointsConfidence(parsed.proofPoints)} />
+                  )}
+                  {analysisSource === "ai" && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded bg-violet-100 text-violet-700">
+                      Synthèse IA
+                    </span>
+                  )}
                 </div>
-                {parsed.proofPoints.length === 0 ? (
+                {draft.proofPoints.length === 0 ? (
                   <p className="text-xs text-muted-foreground rounded-lg border border-border bg-muted/30 px-3 py-2">
-                    Aucune preuve chiffree claire detectee. Tu pourras en ajouter plus tard depuis
-                    la page Profil.
+                    Aucune preuve detectee. Tu pourras en ajouter plus tard depuis la page Profil.
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -686,7 +908,7 @@ OKRs, Program Management, SQL, Cross-functional...`}
             {/* Actions */}
             <div className="flex gap-3 pt-2">
               <button
-                onClick={() => setStep("paste")}
+                onClick={() => { setStep("paste"); setAiError(null) }}
                 className="px-4 py-2.5 rounded-xl border border-border text-sm text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
               >
                 Retour
