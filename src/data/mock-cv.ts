@@ -34,7 +34,7 @@ export const mockCVVersions: CVVersion[] = [
       },
     ],
     content: `HAMZA — Strategy & Operations Manager
-Paris · linkedin.com/in/hamza · hamza@email.com
+Paris · linkedin.com/in/example-profile · you@example.com
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -98,7 +98,7 @@ FORMATION
       },
     ],
     content: `HAMZA — Business Operations Manager
-Paris · linkedin.com/in/hamza · hamza@email.com
+Paris · linkedin.com/in/example-profile · you@example.com
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
